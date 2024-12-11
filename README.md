@@ -1,6 +1,7 @@
 # Efficient Routing-based Synthesis for Digital Microfluidic Biochips via Reinforcement Learning
 ## Environment
 To build the environment, you can follow the code below,
+
 ```conda env create -f environment.yml```
 ## Usage
 To train the agent, you can run the code,
