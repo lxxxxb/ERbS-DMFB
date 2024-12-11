@@ -1,4 +1,5 @@
 # Efficient Routing-based Synthesis for Digital Microfluidic Biochips via Reinforcement Learning
+This is the code for our work "Efficient Routing-based Synthesis for Digital Microfluidic Biochips via Reinforcement Learning". Biao Liu, Chen Jiang, Qi Xu, Hailong Yao, Tsung-Yi Ho and Bo Yuan.
 ## Environment
 To build the environment, you can follow the code below,
 
