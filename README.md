@@ -13,4 +13,4 @@ To evaluate on the real-world assays, you can run the code,
 
 ```python process_assay.py dmfb -w=set_width -l=set_length --load_model_name2=your_saved_model_name --model_dir=your/model/path --oc=6 --evaluate_task=5```
 ## Chip Visualization
-![Markdown Logo](https://github.com/lxxxxb/ERbS-DMFB/edit/main/chip_visualize.png)
+![Markdown Logo]([https://github.com/lxxxxb/ERbS-DMFB/edit/main/chip_visualize.png](https://github.com/lxxxxb/ERbS-DMFB/blob/main/chip_visualize.png))
