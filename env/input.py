@@ -1,6 +1,7 @@
 import networkx as nx
 import matplotlib.pyplot as plt
 import numpy as np
+import math
 
 
 def PCR(y=None):
@@ -64,7 +65,7 @@ def create_dispense(width, length, n):
     return arr, chosen
 
 
-mix_p = [0.29, 0.58, 0.1, -0.5]
+mix_p = [0.29, 0.87, 0.1, -0.5]
 
 
 
@@ -110,6 +111,7 @@ class DAG(nx.DiGraph):
         self.out = chip.ports[-1].position
         chip.ports[-1].direction -= 2 # 画画时箭头反向
 
+        # self._add_trans_nodes(ports[-1])
 
     def _add_trans_nodes(self, out):
         edges_to_remove = []
@@ -168,12 +170,15 @@ class DAG(nx.DiGraph):
                     continue
                 else:
                     m += 1
-            if m > 6:
+            if m > math.ceil(math.sqrt(chip.width * chip.length) / 2):
+            # if m > 6:
+            
                 flag = False
             
 
         return min(flag)
     
+    # def check()
 
     def dispense_droplets(self, droplets):
         for type in self.tports.keys():
@@ -214,7 +219,6 @@ class DAG(nx.DiGraph):
                 elif op['htype'] == 'nonc':
                     father = list(G.predecessors(i))[0]  # 只有一个父节点
                     fop = G.nodes[father]
-                  
                     if 'store' in fop:
                         store = fop['store']
                         store.duration = op['dur']
@@ -227,6 +231,8 @@ class DAG(nx.DiGraph):
         CL = self.CL
         ned_remove = []
         for d in droplets:
+            # if d.type == 2:
+            #     continue
             if d.finished:
                 if d.opid == 80:
                     print('stop')
@@ -242,10 +248,12 @@ class DAG(nx.DiGraph):
                             op['stop'] = t + op['dur']
                     else:
                         if d.opid in G.non_dis:
+                            # 完成了就删除，G.non_dis只记录即将要执行的操作
                             G.non_dis.remove_node(d.opid)
                             if 'store' in op: #他本身就是resource op, 不可能有多个后继
                                 store = op['store']
                             else:
+                                # 完成后先记录到store里
                                 store = droplets.add(2, d.pos)
                                 op['store'] = store
                             for s in G.successors(d.opid):
@@ -258,6 +266,7 @@ class DAG(nx.DiGraph):
                                 if store.ref <= 0:
                                     droplets.remove(store)
                                     del op['store']
+
         for d in ned_remove:
             droplets.remove(d)
         self.check_CL(droplets, chip)
@@ -328,7 +337,7 @@ def protein(splt):
     return G
 
 
-### algorithm-generated assays
+
 def CoDos(y=None):
     G = nx.DiGraph()
     for i in [3,5]:
@@ -343,8 +352,11 @@ def CoDos(y=None):
         G.add_node(i, htype='conf', type='dlt')
     G.add_edges_from([(0,9),(1,9),(2,10),(3,11),(4,11),(5,15),(6,15),(7,17),(8,17),
                       (9,10),(9,13),(10,12),(11,12),(11,14),(12,13),(13,14),(14,16),(15,16),(16,18),(17,18)])
+
     G.porttyp = {'dis1': 2, 'dis2': 2, 'dis3': 2, 'dis4': 3}
     return G
+
+
 
 def Gorma(y=None):
     G = nx.DiGraph()
@@ -356,8 +368,10 @@ def Gorma(y=None):
         G.add_node(i, htype='conf', type='dlt')
     G.add_edges_from([(0, 7), (1, 8), (2, 9), (3, 7), (4, 12), (5, 13), (6, 14), (7, 8), (7, 10), (8, 9), (8, 11),
                       (9, 10), (10, 11), (11, 12), (12, 13), (13, 14)])
+
     G.porttyp = {'dsr': 3, 'dsb': 4}
     return G
+
 
 
 def Remia(y=None):
@@ -371,17 +385,20 @@ def Remia(y=None):
     G.add_edges_from([(0, 8), (3, 8), (4, 9),(5, 10), (6, 11), (7, 12), (8, 14),
                       (9, 13), (1, 15), (2, 16), (8, 9), (9, 10), (11, 12), (13, 14), (15, 16),
                       (10, 11), (12, 13), (14, 15)])
+
     G.porttyp = {'dsr': 3, 'dsb': 5}
     return G
 
 
 
 if __name__ == "__main__":
-    splt = 5  # 例如，3层分裂
-    G = CoDos()
+    splt = 3  # 例如，3层分裂
+    G = protein(splt)
+    # G = CoDos()
     graph_text = graph_to_text(G)
     print(graph_text)
     import os
     print(os.getcwd())
-    with open("CoDos.txt", "w") as file:
+    # 保存到文件
+    with open("invitro.txt", "w") as file:
         file.write(graph_text)
