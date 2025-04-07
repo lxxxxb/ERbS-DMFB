@@ -18,15 +18,11 @@ class RoutingTaskManager:
         self.length = chip.length
         self.chip=chip
         self.droplets = Droplets([])
-        # self.starts = np.zeros((self.n_droplets, 2), dtype=int)
-        # self.ends = np.zeros((self.n_droplets, 2), dtype=int)
-        # self.distances = np.zeros((self.n_droplets,), dtype=int)
         self.oc=oc
         if fov[0] > min(self.width, self.length):
             raise RuntimeError('Fov is too large')
         self.fov = fov
         self.stall = stall
-        # variables below change every game
         self.step_count = 0
         random.seed(datetime.now())
 
@@ -60,54 +56,23 @@ class RoutingTaskManager:
         return Locations
 
     def moveDroplets(self, actions):
-        def comflic_static(all_cur_position):
-            n_droplets = len(all_cur_position)
-            static_conflic = [0] * n_droplets
-            for i in range(n_droplets - 1):
-                for j in range(i+1, n_droplets):
-                    if np.linalg.norm(all_cur_position[i]-all_cur_position[j]) < 2:
-                        static_conflic[i] += 1
-                        static_conflic[j] += 1
-            return static_conflic
-
-        def comflic_dynamic(all_cur_position, all_past_pisition):
-            n_droplets = len(all_cur_position)
-            dynamic_conflict = [0] * n_droplets
-            for i in range(n_droplets):
-                for j in range(n_droplets):
-                    if i != j:
-                        if np.linalg.norm(all_past_pisition[i] - all_cur_position[j]) < 2:
-                            dynamic_conflict[i] += 1
-                            dynamic_conflict[j] += 1
-            return dynamic_conflict
-
+        occupied=self.last_frame.copy()
         if len(actions) != self.droplets.__len__():
             raise RuntimeError("The number of actions is not the same"
                                " as n_droplets")
 
         self.step_count += 1
         rewards = []
-        pasts = []
-        curs = []
+        # pasts = []
+        # curs = []
         dones = self.getTaskStatus()
+        constraints=0
         for i in range(self.droplets.__len__()):
-            reward, past, cur = self.moveOneDroplet(i, actions[i])
+            reward, constraint = self.moveOneDroplet(i, actions[i], occupied)
             rewards.append(reward)
-            pasts.append(past)
-            curs.append(cur)
-        sta = np.array(comflic_static(np.array(curs)))
-        dy = np.array(comflic_dynamic(curs, pasts))
-        # the nunber of obey the constraints
-        constraints = np.sum(sta)+np.sum(dy)
-        rewards = np.array(rewards)-2*sta-2*dy
-        # if self.stall:
-        #     for i in range(self.droplets.__len__()):
-        #         if dones[i]:
-        #             rewards[i] = 0
+            constraints += constraint
+        rewards = np.array(rewards)-2 * constraints
         terminated = self.check_finish(self.step_count)
-
-        # rewards = list(rewards)
-
         return rewards, constraints, terminated
 
     def typeindex(self):
@@ -121,7 +86,6 @@ class RoutingTaskManager:
         return index_type0, index_type1
 
     def _isinvalidaction(self):
-        # 判断两个液滴有没有走到一块？没用吧？
         position = np.zeros((self.droplets.__len__(), 2))
         for i, d in enumerate(self.droplets):
             position[i][0], position[i][1] = d.x, d.y
@@ -136,17 +100,18 @@ class RoutingTaskManager:
         else:
             return False
 
-    def moveOneDroplet(self, droplet_index, action):
+    def moveOneDroplet(self, droplet_index, action, occupied):
+        constraint = 0
         if droplet_index >= self.droplets.__len__():
             raise RuntimeError(
                 "The droplet index {} is out of bound".format(droplet_index))
         droplet = self.droplets[droplet_index]
-        x, y = droplet.get_position()
+        px, py = droplet.get_position()
         if action == 0:
             if droplet.type == 2:
                  droplet.move_reward(0)
-            return -0.3 - 0.0001*self.step_count**1.5, np.array([x, y]), np.array([x, y])
-        past_in_blocks = self.chip_state[x, y]
+            return -0.3 - 0.0001*self.step_count**1.5, constraint
+        past_in_blocks = self.chip_state[px, py]
 
         # def conflictBlocks(past,cur):
         #     past_in = self.chip._isinsideBlocks([past])
@@ -158,22 +123,26 @@ class RoutingTaskManager:
         #     return 0
 
         if self.stall and droplet.finished:
-            return 0.0, np.array([x, y]), np.array([x, y])
+            return 0.0, constraint
 
-        prob = self.getMoveProb(x,y)
+        prob = self.getMoveProb(px,py)
+        occupied[px, py]=0
         if random.random() <= prob:
             Fail = False
-            newpos = droplet.try2move(action) # try2move
-            if newpos[0] < 0 or newpos[0] >= self.width or newpos[1] < 0 or newpos[1]>= self.length:
+            x, y = droplet.try2move(action) # try2move
+            if x < 0 or x >= self.width or y < 0 or y>= self.length:
+                Fail = True
+            elif not np.all(occupied[max(0, x-1):min(occupied.shape[0], x+2), max(0, y-1):min(occupied.shape[1], y+2)] == 0):
+                constraint = 1
                 Fail = True
             else:
-                cur_in = self.chip_state[newpos[0], newpos[1]]
+                cur_in = self.chip_state[x, y]
                 if not past_in_blocks and cur_in:
                     Fail = True
 
             #重新来一遍
             if Fail:
-                reward = -1
+                reward = -0.5
                 droplet.fail2movestep()
             else:
                 reward = droplet.move_reward(action)
@@ -188,7 +157,10 @@ class RoutingTaskManager:
         droplet.last_action = action
         # 走得越久惩罚越大，按self.step_count平方计算
         reward-= 0.0001*self.step_count**1.5
-        return reward, np.array([x, y]), np.array(droplet.get_position())
+        nx, ny=droplet.get_position()
+        occupied[px, py] = droplet_index+1
+        occupied[nx, ny] = droplet_index+1
+        return reward, constraint
 
     def getMoveProb(self, x,y):
         prob = self.chip.m_health[x][y]
@@ -230,18 +202,28 @@ class RoutingTaskManager:
             for x in range(m.x_min, m.x_max + 1):
                 for y in range(m.y_min, m.y_max + 1):
                     chip_state[x][y] = 1
-        size=[[5],[(2,9,9,5)],[(2,9,9,2,164)],[(3,9,9,2,245)],[(4,9,9,2,326)], [(4,9,9,2,326),(2,9,9,1,164)], [(4,9,9,2,326),(4,9,9,1,325)]]
-        obs_set=[obs_1, obs_2, obs_3, obs_4, obs_5, obs2_0, obs2_1]
+        size=[[5],[(2,9,9,5)],[(2,9,9,2,164)],[(3,9,9,2,245)],[(4,9,9,2,326)], [(4,9,9,2,326),(2,9,9,1,164)], [(4,9,9,2,326),(4,9,9,1,325)],[(4, self.length,self.width)],[(5, self.length,self.width)]]
+        obs_set=[obs_1, obs_2, obs_3, obs_4, obs_5, obs2_0, obs2_1, obs3_0, obs3_1]
 
         if get_size: # 返回state的大小供replay_buffer初始化
             return size[self.oc]
 
         self.chip_state = chip_state
 
-        # droplets（自定义obs内容）
-        droplets=obs_set[self.oc](self.width, self.length, self.droplets, last_actions, self.fov[0])
+        # obs（自定义obs内容）
+        self.last_frame=None
+        if self.oc<7:
+            observation = obs_set[self.oc](self.width, self.length, self.droplets, last_actions, self.fov[0])
+            self.last_frame = np.zeros((self.width, self.length))
+        elif self.oc==7:
+            observation = obs_set[self.oc](self.width, self.length, self.droplets, self.chip.blocks)
+            self.last_frame = observation[0]
+        else: #oc==8
+            observation = obs_set[self.oc](self.width, self.length, self.droplets, self.chip.blocks, self.last_frame)
+            self.last_frame = observation[0]
 
-        return droplets
+
+        return observation
 
     # partitial observed sertting for droplet-index
     def getOneObs(self, agent_i, type=0):
@@ -403,7 +385,7 @@ class TrainingManager(RoutingTaskManager):
     def GenDroplets_T2(self, drop_num):
         starts = self._Generate_Locations(drop_num)
         for i in range(0, drop_num):
-            self.droplets.add(1, starts[i], difficulty=0.1*drop_num+20-self.chip.width-self.chip.length)
+            self.droplets.add(1, starts[i], difficulty=0.5*drop_num+10-0.1*self.chip.width-0.1*self.chip.length)
 
     def GenDroplets_Store(self):
         pass
@@ -432,7 +414,7 @@ class TrainingManager(RoutingTaskManager):
 
     def set4traintask2(self, revers=False):
         if  self.task == 1:
-            Droplet_T2.fullmix=0.3
+            Droplet_T2.fullmix=1
             if revers:
                 Droplet_T2.fullmix=1
 
@@ -443,7 +425,10 @@ class AssayTaskManager(RoutingTaskManager):
     def __init__(self, chip, assay, **kwargs):
         super().__init__(chip, **kwargs)
         self.assay = assay
-        self.taskname = assay.name
+        self.task = assay.name
+
+        # 时间变短
+        Droplet_T2.fullmix = 1.0
 
     def check_finish(self, step_count):
         terminated = False
@@ -457,10 +442,12 @@ class AssayTaskManager(RoutingTaskManager):
         return terminated
 
     def refresh(self, drop_num=None):
-        self.chip.create_dispense(8 + 1)
-        self.assay.assign_ports(self.chip.ports)
+        # self.chip.create_dispense(8 + 1)
+        self.droplets.clear()
+        self.assay.assign_ports(self.chip)
         self.assay.initial_candidate_list()
         self.assay.update_droplets(self.droplets, 0, self.chip)
+        self.step_count = 0
 
     def get_env_info(self):
         state = self.getglobalobs().flatten()
@@ -513,7 +500,7 @@ class DMFBenv(ParallelEnv):
         # Other data members
         # self.routing_manager = RoutingTaskManager(
         #     chip, fov, stall, assay=task)
-        self. routing_manager = routing_manager
+        self.routing_manager = routing_manager
 
         # variables below change every game
         self.step_count = 0
@@ -522,37 +509,36 @@ class DMFBenv(ParallelEnv):
         self.mode=None
         if show or savemp4:
             self.mode = 'human'
-            self.render_init(self.width, self.length, task=routing_manager.taskname, savemp4=savemp4)
+            self.render_init(self.width, self.length, task=routing_manager.task, savemp4=savemp4)
 
     @property
     def n_agents(self):
         return len(self.routing_manager.droplets)
 
 
-    def step(self, actions, record=True):
+    def step(self, actions, record=True, timestep=None):
 
         success = 0
-        # if isinstance(actions, dict):
-        #     acts = [actions[agent] for agent in self.agents]
-        # elif isinstance(actions, list):
-        #     acts = actions
-        # else:
-        #     raise TypeError('wrong actions')
+  
+        shaped_weight = sparse_weight = 1.0
+
+        if timestep is not None:
+            decay_factor = min(1, timestep / 300000)
+            shaped_weight = 1.0 - decay_factor
+            sparse_weight = decay_factor
+
         acts = actions
         rewards, constraints, terminated = self.routing_manager.moveDroplets(acts)
         if record:
             self.routing_manager.chip.addUsage([d.pos for d in self.routing_manager.droplets if not d.finished])
         self.constraints += constraints
-        # for key, r in zip(self.agents, rewards):
-        #     self.rewards[key] = r
+
         obs = self.getObs([d.last_action for d in self.routing_manager.droplets])  # patitial observed consist of the Obs
 
         if terminated:
-            rewards = [i + 5 for i in rewards]
-            rewards = [rewards[i]+self.routing_manager.droplets[i].difficulty for i in range(self.n_agents)]
-            if self.constraints == 0:
-                rewards = [i + 5 for i in rewards]
-                success = 1
+            rewards = [shaped_weight * r + sparse_weight * 10 for r in rewards]
+            rewards = [rewards[i]+ sparse_weight * self.routing_manager.droplets[i].difficulty for i in range(self.n_agents)]
+            success = 1
         # self.routing_manager.getglobalobs()  # update the state
         info = {'constraints': constraints, 'success': success}
         if terminated and self.mode is not None:
@@ -568,10 +554,6 @@ class DMFBenv(ParallelEnv):
 
 
     def reset(self, n_agents=None, evaluate=False):
-        # 现在reset没有重新生成chip
-        # self.rewards = {i: 0 for i in self.agents}
-        # self.dones = {i: False for i in self.agents}
-
         self.constraints = 0
         self.routing_manager.refresh(drop_num=n_agents) # 会更新degrade, 是new就是新生成的
         obs = self.getObs()
@@ -580,8 +562,6 @@ class DMFBenv(ParallelEnv):
 
     def restart(self, index=None):
         self.routing_manager.restartforall()
-        # self.rewards = {i: 0.0 for i in self.agents}
-        # self.dones = {i: False for i in self.agents}
         self.step_count = 0
         self.constraints = 0
         return self.getObs()
@@ -597,13 +577,10 @@ class DMFBenv(ParallelEnv):
             for idx in actions:
                 last_actions[i,idx] = 1
                 i += 1
-            # rows = np.arange(self.n_agents)
-            # last_actions[rows, actions] = 1
         return self.routing_manager.get_state_obs(last_actions)
 
 
-# 2021 531添加
-# used for qmix
+
     def get_env_info(self):
         env_info=self.routing_manager.get_env_info()
         env_info["n_actions"]=len(self.actions)
@@ -654,7 +631,7 @@ class DMFBenv(ParallelEnv):
             return None
 
         u_size = self.u_size  # cell 尺寸
-        m = 2  # cell 间隔
+        m = 1  # cell 间隔
         screen_length = self.screen_length
         screen_width = self.screen_width
         if self.viewer is None:
@@ -670,13 +647,9 @@ class DMFBenv(ParallelEnv):
             block = pygame.image.frombuffer(blockarr.flatten(), (u_size - 2 * m, u_size - 2 * m), 'RGB').convert()
             for x in range(1, self.width+1):
                 for y in range(1, self.length+1):
-                    not_block = True
-                    for b in self.routing_manager.chip.blocks:
-                        if (x >= b.x_min+1) and (x <= b.x_max+1) and (y >= b.y_min+1) and (y <= b.y_max+1):
-                            background.blit(block, (x * u_size + m, y * u_size + m))  # block
-                            not_block = False
-                            break
-                    if not_block:
+                    if self.routing_manager.chip.grid[x - 1, y - 1] == 0:
+                        background.blit(block, (x * u_size + m, y * u_size + m))  # block
+                    else:
                         cellarr = drawcell(u_size - 2 * m, 100+int(155*self.routing_manager.chip.m_health[x-1][y-1]))
                         cell = pygame.image.frombuffer(cellarr.flatten(), (u_size - 2 * m, u_size - 2 * m),
                                                        'RGB').convert()
@@ -685,29 +658,22 @@ class DMFBenv(ParallelEnv):
             icon = pygame.image.frombuffer(
                 Image.open('../fig/dispense_port.bmp').resize((u_size, u_size)).tobytes(), (u_size, u_size), 'RGB') \
                 .convert()
+            fonta = pygame.font.SysFont("Times New Roman", 30)
             for port in self.routing_manager.chip.ports:
                 # print(port[0], port[1])
-                background.blit(icon, ((port[0]+1) * u_size, (port[1]+1) * u_size))
+                direction = ["→", "↓", "←", "↑"]
+                arrow = fonta.render(direction[port.direction], True, (0, 0, 0), )  # (255, 255, 255))
+                background.blit(icon, ((port.drawpos[0]) * u_size, (port.drawpos[1]) * u_size))
+                background.blit(arrow, ((port.drawpos[0]) * u_size+u_size/5, (port.drawpos[1]) * u_size+u_size/7))
 
             self.background = background
 
         self.viewer.blit(self.background, (0, 0))
-        unused = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        unused = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 0, 1, 2, 3, 4, 5, 6, 7, 8]
         for d in droplets:
             if hasattr(d,'name'):
                 unused.remove(d.name)
-
-        # goal
-        # for idx, d in enumerate(droplets):
-        #     if d.type == 0:
-        #         goalfile = '../fig/goal{}.png'.format(idx)
-        #         goal = pygame.image.load(goalfile).convert_alpha()
-        #         goal = pygame.transform.scale(goal, (u_size - m, u_size - m))
-        #         self.viewer.blit(goal, (d.des[0] * u_size, d.des[1] * u_size))
-
-            # # 保存为背景
-            # self.background = background
-        goalset={} # 画完液滴在画goal吧，放在最上面图层。
+        font = pygame.font.SysFont("Times New Roman", 15)
         for d in droplets:
             if not hasattr(d,'dropicon'):
                 idx = unused.pop(0)
@@ -727,9 +693,9 @@ class DMFBenv(ParallelEnv):
                     setattr(d,'goalicon',goal)
                 self.viewer.blit(d.goalicon, ((d.des[0]+1) * u_size, (d.des[1]+1) * u_size))
             # 显示百分比
-            font = pygame.font.SysFont("Times New Roman", 15)
+
             if d.type == 1:
-                text = font.render("%.2f" % (d.mix_percent * 100) + "%", True, (0, 0, 0), )  # (255, 255, 255))
+                text = font.render("%.1f" % (d.mix_percent * 100 /d.fullmix) + "%", True, (0, 0, 0), )  # (255, 255, 255))
                 self.viewer.blit(text, ((d.pos[0] + 1) * u_size, (d.pos[1] + 1.25) * u_size))
                 pass
 
@@ -743,10 +709,10 @@ class DMFBenv(ParallelEnv):
         return pygame.display.flip()  # if mode == 'human' else img
 
     def render_init(self,width,length, task, savemp4=False):
+        
         self.u_size = 40  # size for cell pixels
-        # self.env_width = self.u_size * \
-        #     (self.width)    # scenario width (pixels)
-        # self.env_length = self.u_size * (self.length)  # height
+        if length > 30:
+            self.u_size = 20
         self.viewer = None
         self.save = False
         self.screen_length = self.u_size * (length+2)
@@ -761,6 +727,7 @@ class DMFBenv(ParallelEnv):
             fourcc = cv2.VideoWriter_fourcc('I', '4', '2', '0')  # 不同视频编码对应不同视频格式（例：'I','4','2','0' 对应avi格式）
             fps = 12
             self.video = cv2.VideoWriter(file_path, fourcc, fps, (self.screen_width, self.screen_length))
+            print('到这了么')
 
     def close(self):
         try:
@@ -793,11 +760,9 @@ def obs_1(w,l, droplets, last_actions, fov):
     scaled_d = 1 - (dis / (fov + 1))
     scaled_d = scaled_d / np.sum(scaled_d, axis=-1, keepdims=True)
 
-    # 删除partner
     indices = np.where(partners != -1)
     scaled_d[indices, partners[indices]] = 0
 
-    # 拼last action
     drop = np.concatenate([drop, last_actions], axis=-1)
 
     drop = np.concatenate([drop, scaled_d], axis=-1)
@@ -828,11 +793,9 @@ def obs_2(w,l, droplets, last_actions, fov):
     scaled_d = 1 - (dis / (fov + 1))
     scaled_d = scaled_d / np.sum(scaled_d, axis=-1, keepdims=True)
 
-    # 删除partner
     indices = np.where(partners != -1)
     scaled_d[indices, partners[indices]] = 0
 
-    # 拼last action
     drop = np.concatenate([drop, last_actions], axis=-1)
 
     drop = np.concatenate([drop, scaled_d], axis=-1)
@@ -846,16 +809,9 @@ def obs_2(w,l, droplets, last_actions, fov):
     global_drop[hf:w + hf, hf:l + hf] = gobs  # 在原先的droplet信息周围加一圈宽为hf,值为0的boundary
     for i, d in enumerate(droplets):
         center = np.array(d.pos)  # 当前液滴所在坐标
-
-        # get block layer 0
         obs[i, 0] = global_block[center[0]:center[0] + fov, center[1]:center[1] + fov]  # 从中取fov所在区域
-
-        # get droplet layer 1
         obs[i,1] = global_drop[center[0]:center[0] + fov, center[1]:center[1] + fov]
-        # if droplet.type == 0:
-        #     if droplet.partner:
-        #         obs_i[1][obs_i[1] == (self.droplets.index(droplet.partner) + 1)] = 0
-        #     obs_i[1] = obs_i[1] > 0
+ 
     obs_flat = obs.reshape((n, -1))
 
     return np.concatenate([obs_flat, drop], axis=-1)
@@ -904,16 +860,9 @@ def obs_3(w,l, droplets, last_actions, fov):
     dirct=np.zeros((n,2))
     for i, d in enumerate(droplets):
         center = np.array(d.pos)  # 当前液滴所在坐标
-
-        # get block layer 0
         obs[i, 0] = global_block[center[0]:center[0] + fov, center[1]:center[1] + fov]  # 从中取fov所在区域
-
-        # get droplet layer 1
         obs[i, 1] = global_drop[center[0]:center[0] + fov, center[1]:center[1] + fov]
-        # if droplet.type == 0:
-        #     if droplet.partner:
-        #         obs_i[1][obs_i[1] == (self.droplets.index(droplet.partner) + 1)] = 0
-        #     obs_i[1] = obs_i[1] > 0
+
         dirct[i] = d.direct_vector(w, l, hf)
     obs[:,1] = obs[:,1] > 0
     obs_flat = obs.reshape((n, -1))
@@ -1118,7 +1067,7 @@ def obs2_1(w,l, droplets, last_actions, fov):
         gobs[(2,) + tuple(d.pos)] = dirct_type0[i][1]
 
     # 把以前的贴过来
-    obs = np.zeros((n, 4, fov, fov))
+    # obs = np.zeros((n, 4, fov, fov))
     global_block = np.ones((w + fov, l + fov))
 
     global_block[hf:w + hf, hf:l + hf] = np.zeros((w, l))  # 在原先的block周围加一圈宽为hf,值为1的boundary
@@ -1164,6 +1113,68 @@ def obs2_1(w,l, droplets, last_actions, fov):
         return obs
     except:
         return obs
+
+def obs3_0(w, l, droplets, blocks):
+    gobs=np.zeros((4,w,l))
+    n = droplets.__len__()
+    dirct = np.zeros((n, 2))
+    for i, d in enumerate(droplets):
+        gobs[(0,)+tuple(d.pos)] = i + 1
+        dirct[i] = d.direct_vector(w, l, 3)
+        gobs[(2,)+tuple(d.pos)] = dirct[i][0]
+        gobs[(3,)+tuple(d.pos)] = dirct[i][1]
+    for m in blocks:
+        for x in range(m.x_min, m.x_max + 1):
+            for y in range(m.y_min, m.y_max + 1):
+                gobs[1][x][y] = 1
+    return gobs
+
+def obs3_1(w, l, droplets, blocks, last_frame): #增加一格上一帧
+    gobs=np.zeros((5, w, l))
+    gobs[1]=np.ones((w,l))
+    n = droplets.__len__()
+    dirct = np.zeros((n, 2))
+    for i, d in enumerate(droplets):
+        gobs[(0,)+tuple(d.pos)] = i + 1 # droplets
+        dirct[i] = d.direct_vector(w, l, 3)
+        # gobs[1, max(0, d.pos[0]-1):min(w, d.pos[0]+2), max(0, d.pos[1]-1):min(l, d.pos[1]+2)] = 0
+        gobs[(2,)+tuple(d.pos)] = dirct[i][0]
+        gobs[(3,)+tuple(d.pos)] = dirct[i][1]
+    for m in blocks:
+        for x in range(m.x_min, m.x_max + 1):
+            for y in range(m.y_min, m.y_max + 1):
+                gobs[1][x][y] = 0
+    if last_frame:
+        gobs[-1] = last_frame
+    else:
+        gobs[-1] = gobs[0]
+    return gobs
+
+from .observation import guide_line
+def obs3_2(w, l, droplets, blocks, last_frame): #再加上指引 （前3个点）
+    gobs=np.zeros((5, w, l))
+    gobs[1]=np.ones((w,l)) # 1能走，0不能走？
+    n = droplets.__len__()
+    dirct = np.zeros((n, 2))
+    guide_lines = np.zeros((n, 3, 2))
+    for i, d in enumerate(droplets):
+        gobs[(0,)+tuple(d.pos)] = i + 1 # droplets
+        dirct[i] = d.direct_vector(w, l, 3)
+        # gobs[1, max(0, d.pos[0]-1):min(w, d.pos[0]+2), max(0, d.pos[1]-1):min(l, d.pos[1]+2)] = 0 #这是啥意思？ 哦把所有液滴设为block
+        gobs[(2,)+tuple(d.pos)] = dirct[i][0]
+        gobs[(3,)+tuple(d.pos)] = dirct[i][1]
+        guide_lines[i]=np.array(guide_line(d, blocks))
+    for m in blocks:
+        for x in range(m.x_min, m.x_max + 1):
+            for y in range(m.y_min, m.y_max + 1):
+                gobs[1][x][y] = 0
+    if last_frame:
+        gobs[-1] = last_frame
+    else:
+        gobs[-1] = gobs[0]
+
+    return gobs
+
 
 def rotate(obs, dirct):
 
