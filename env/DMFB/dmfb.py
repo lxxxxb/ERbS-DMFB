@@ -27,7 +27,6 @@ class RoutingTaskManager:
         random.seed(datetime.now())
 
 
-    # reset the enviorment
     def refresh(self):
         self.droplets.clear()
         self.chip.updateHealth()
@@ -42,7 +41,6 @@ class RoutingTaskManager:
         if n_droplets == 1:
             return Locations
         dis = compute_norm_squared_EDM(Locations) #计算生成的点之间的距离
-        # out是把dis矩阵对角线的0给删了
         strided = np.lib.stride_tricks.as_strided
         s0, s1 = dis.strides
         m = dis.shape[0]
@@ -63,8 +61,6 @@ class RoutingTaskManager:
 
         self.step_count += 1
         rewards = []
-        # pasts = []
-        # curs = []
         dones = self.getTaskStatus()
         constraints=0
         for i in range(self.droplets.__len__()):
@@ -113,14 +109,6 @@ class RoutingTaskManager:
             return -0.3 - 0.0001*self.step_count**1.5, constraint
         past_in_blocks = self.chip_state[px, py]
 
-        # def conflictBlocks(past,cur):
-        #     past_in = self.chip._isinsideBlocks([past])
-        #     cur_in = self.chip._isinsideBlocks([cur])
-        #     if not past_in and cur_in:
-        #         return -2
-        #     if past_in and not cur_in:
-        #         return 0.5
-        #     return 0
 
         if self.stall and droplet.finished:
             return 0.0, constraint
@@ -140,7 +128,6 @@ class RoutingTaskManager:
                 if not past_in_blocks and cur_in:
                     Fail = True
 
-            #重新来一遍
             if Fail:
                 reward = -0.5
                 droplet.fail2movestep()
@@ -148,14 +135,10 @@ class RoutingTaskManager:
                 reward = droplet.move_reward(action)
                 if past_in_blocks and not cur_in:
                     reward += 0.5
-            # if self._isinvalidaction():
-            #     droplet.set_position(x,y)
-            #     reward=-0.4
+
         else:
             reward = -0.4
-        #     self.distances[droplet_index] = new_dist
         droplet.last_action = action
-        # 走得越久惩罚越大，按self.step_count平方计算
         reward-= 0.0001*self.step_count**1.5
         nx, ny=droplet.get_position()
         occupied[px, py] = droplet_index+1
@@ -210,7 +193,6 @@ class RoutingTaskManager:
 
         self.chip_state = chip_state
 
-        # obs（自定义obs内容）
         self.last_frame=None
         if self.oc<7:
             observation = obs_set[self.oc](self.width, self.length, self.droplets, last_actions, self.fov[0])
@@ -225,7 +207,6 @@ class RoutingTaskManager:
 
         return observation
 
-    # partitial observed sertting for droplet-index
     def getOneObs(self, agent_i, type=0):
         '''
         format of gloabal observed
@@ -243,8 +224,7 @@ class RoutingTaskManager:
 
         fov = self.fov[droplet.type]  # 正方形fov边长
         hf=fov//2
-        # obs_i = np.zeros((4, fov, fov))
-        # obs_i = np.zeros((3, fov, fov))
+
         obs_i = np.zeros((2, fov, fov))
         center = np.array(droplet.pos) # 当前液滴所在坐标
         #
@@ -253,28 +233,10 @@ class RoutingTaskManager:
         global_block=np.ones((self.width+fov, self.length+fov))
         global_block[hf:self.width+hf,hf:self.length+hf] = self.global_obs[0]  # 在原先的block周围加一圈宽为hf,值为1的boundary
         obs_i[0]=global_block[center[0]:center[0]+fov,center[1]:center[1]+fov] # 从中取fov所在区域
-        # obs_i[2] = global_block[center[0]:center[0] + fov, center[1]:center[1] + fov]  # 从中取fov所在区域
-
-        # get droplet layer 1
         global_drop = np.zeros((self.width + fov, self.length + fov))
         global_drop[hf:self.width + hf, hf:self.length + hf] = self.global_obs[1] # 在原先的droplet信息周围加一圈宽为hf,值为0的boundary
         obs_i[1] = global_drop[center[0]:center[0] + fov, center[1]:center[1] + fov]
-        # obs_i[0] = global_drop[center[0]:center[0] + fov, center[1]:center[1] + fov]
-
-        # add other droplets moving information layer 2 & 3
-        # mask = obs_i[1]>0
-        # dirs=[]
-        # for seeing_droplet in obs_i[1][mask]-1:
-        #     other_droplet = self.droplets[int(seeing_droplet)]
-        #     if other_droplet.type==0:
-        #         dir=other_droplet.direct_vector(self.width,self.length,hf)
-        #         dir=dir/np.max(dir) # scale to 0~1
-        #     elif other_droplet.type==1:
-        #         dir=other_droplet.direct_vector()
-        #     else:
-        #         dir=[0,0]
-        #     dirs.append(dir)
-        # obs_i[2:4][:,mask] = np.array(dirs).T
+  
 
 
         if droplet.type==0:
@@ -289,7 +251,6 @@ class RoutingTaskManager:
         # obs_i[1] = obs_i[1] > 0
 
         if droplet.type==1:
-            # 来把obs转个圈, +x代表前方，action 1不变，action 2 延x轴反转(-x2x)， action 3左转90度(-y2x or say x2y)，action 4 右转90度(y2x) 默认x超前
             if droplet.headto == 2:
                 obs_i = np.flip(obs_i, 1)
             elif droplet.headto == 3:
@@ -345,13 +306,11 @@ class TrainingManager(RoutingTaskManager):
     def __init__(self, chip, task=-1,n_block=0, **kwargs):
         super().__init__(chip, **kwargs)
         droplet_limit = int((self.width+1)*(self.length+1)/10)
-        # if n_droplets > droplet_limit:
-        #     raise TypeError('Too many droplets for DMFB')
+
         self.n_droplets = 4
         self.GenDroplets = (self.GenDroplets_T1, self.GenDroplets_T2, self.GenDroplets_Store)
         self.task=task
         self.n_block = n_block
-        # self.Generate_task()
 
     @property
     def max_step(self):
@@ -371,7 +330,6 @@ class TrainingManager(RoutingTaskManager):
             self.GenDroplets_Store()
         else:
             self.GenDroplets[self.task](drop_num)
-        # self.droplets_initial=deepcopy(self.droplets)
 
     def GenDroplets_T1(self, drop_num):
         Start_End = self._Generate_Locations(2*drop_num)
@@ -404,7 +362,6 @@ class TrainingManager(RoutingTaskManager):
         self.Generate_task(drop_num)
 
     def get_env_info(self):
-        # 设置buffer初始化的大小咯，现在只保存一整个state的信息了
         obs_shape=self.get_state_obs(get_size=True)
         print('obs shape: ', obs_shape)
         env_info = {"state_shape": obs_shape,
@@ -427,7 +384,6 @@ class AssayTaskManager(RoutingTaskManager):
         self.assay = assay
         self.task = assay.name
 
-        # 时间变短
         Droplet_T2.fullmix = 1.0
 
     def check_finish(self, step_count):
@@ -442,7 +398,6 @@ class AssayTaskManager(RoutingTaskManager):
         return terminated
 
     def refresh(self, drop_num=None):
-        # self.chip.create_dispense(8 + 1)
         self.droplets.clear()
         self.assay.assign_ports(self.chip)
         self.assay.initial_candidate_list()
